@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run prisma:generate && npm run build && if [ \"$VERCEL_ENV\" = production ]; then npm run prisma:deploy && node dist/scripts/bootstrap-super-admin.js; fi",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api"
+    }
+  ]
+}

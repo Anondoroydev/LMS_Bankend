@@ -1,0 +1,212 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum ContentType {
+  VIDEO
+  LIVE_LINK
+  DOCUMENT
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(STUDENT)
+  tokenVersion Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  passwordResetTokens PasswordResetToken[]
+  courses             Course[]             @relation("CourseTeacher")
+  enrollments         Enrollment[]         @relation("StudentEnrollments")
+  submissions         Submission[]         @relation("StudentSubmissions")
+  assignments         Homework[]           @relation("HomeworkCreator")
+  progress            StudentProgress[]
+  watchLogs           ProgressHeartbeat[]
+
+  @@index([role])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique
+  userId    String    @db.Uuid
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model Course {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  teacherId   String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teacher User    @relation("CourseTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  batches Batch[]
+
+  @@index([teacherId])
+}
+
+model Batch {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  courseId  String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  enrollments Enrollment[]
+  folders     Folder[]
+
+  @@index([courseId])
+}
+
+model Enrollment {
+  id        String   @id @default(uuid()) @db.Uuid
+  studentId String   @db.Uuid
+  batchId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  student User  @relation("StudentEnrollments", fields: [studentId], references: [id], onDelete: Cascade)
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, batchId])
+  @@index([batchId])
+}
+
+model Folder {
+  id             String   @id @default(uuid()) @db.Uuid
+  title          String
+  batchId        String   @db.Uuid
+  parentFolderId String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  batch    Batch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  parent   Folder?    @relation("FolderTree", fields: [parentFolderId], references: [id], onDelete: Cascade)
+  children Folder[]   @relation("FolderTree")
+  contents Content[]
+  homework Homework[]
+
+  @@index([batchId, parentFolderId])
+}
+
+model Content {
+  id              String      @id @default(uuid()) @db.Uuid
+  title           String
+  type            ContentType
+  videoUrl        String?
+  liveUrl         String?
+  documentUrl     String?
+  durationSeconds Int?
+  folderId        String      @db.Uuid
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  folder    Folder              @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  progress  StudentProgress[]
+  watchLogs ProgressHeartbeat[]
+
+  @@index([folderId])
+}
+
+model Homework {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  dueDate     DateTime
+  folderId    String   @db.Uuid
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  folder      Folder       @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  createdBy   User         @relation("HomeworkCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  submissions Submission[]
+
+  @@index([folderId, dueDate])
+  @@index([createdById])
+}
+
+model Submission {
+  id          String   @id @default(uuid()) @db.Uuid
+  homeworkId  String   @db.Uuid
+  studentId   String   @db.Uuid
+  fileUrl     String?
+  marks       Float?
+  feedback    String?
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  homework    Homework               @relation(fields: [homeworkId], references: [id], onDelete: Cascade)
+  student     User                   @relation("StudentSubmissions", fields: [studentId], references: [id], onDelete: Cascade)
+  attachments SubmissionAttachment[]
+
+  @@unique([homeworkId, studentId])
+  @@index([studentId, submittedAt])
+}
+
+model SubmissionAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  submissionId String   @db.Uuid
+  storageKey   String
+  fileName     String
+  contentType  String
+  sizeBytes    Int
+  createdAt    DateTime @default(now())
+
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+}
+
+model StudentProgress {
+  id            String   @id @default(uuid()) @db.Uuid
+  studentId     String   @db.Uuid
+  contentId     String   @db.Uuid
+  watchDuration Int      @default(0)
+  lastPosition  Int      @default(0)
+  isCompleted   Boolean  @default(false)
+  lastWatchedAt DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, contentId])
+  @@index([contentId, isCompleted])
+}
+
+model ProgressHeartbeat {
+  id            String   @id @default(uuid()) @db.Uuid
+  studentId     String   @db.Uuid
+  contentId     String   @db.Uuid
+  watchDuration Int
+  lastPosition  Int
+  createdAt     DateTime @default(now())
+
+  student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, contentId, createdAt])
+}

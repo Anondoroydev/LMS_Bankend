@@ -1,0 +1,743 @@
+{
+  "info": {
+    "_postman_id": "4eecff90-2718-44c1-9cd8-6bb370c0100a",
+    "name": "Secure Education LMS API",
+    "description": "All backend routes grouped by workflow. There is exactly one Login request; it saves a token used by protected routes. Resource IDs are captured automatically from create/register responses.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "One login request for any account role. Set email/password, send Login, then protected routes use the saved token.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Use the email and password variables for a student, teacher, or super admin. Successful login saves token and userRole.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login succeeded\", function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "  const result = pm.response.json();",
+                  "  if (pm.environment.name) pm.environment.set('token', result.token);\npm.collectionVariables.set('token', result.token);",
+                  "  if (pm.environment.name) pm.environment.set('userRole', result.user.role);\npm.collectionVariables.set('userRole', result.user.role);",
+                  "  if (result.user.role === 'STUDENT') { if (pm.environment.name) pm.environment.set('studentId', result.user.id);\npm.collectionVariables.set('studentId', result.user.id); }",
+                  "  if (result.user.role === 'TEACHER') { if (pm.environment.name) pm.environment.set('teacherId', result.user.id);\npm.collectionVariables.set('teacherId', result.user.id); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register student",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{newStudentName}}\",\n  \"email\": \"{{newStudentEmail}}\",\n  \"password\": \"{{newStudentPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/auth/register",
+            "description": "Public registration always creates a student account.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.user?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('studentId', result.user.id);",
+                  "    pm.collectionVariables.set('studentId', result.user.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Current user",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/auth/me",
+            "description": "Get the account associated with the current token."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/logout",
+            "description": "Revoke this account’s current JWTs."
+          }
+        },
+        {
+          "name": "Request password reset OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{resetEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/auth/forgot-password",
+            "description": "Requires SMTP. OTP is emailed and expires after 10 minutes.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Reset password with OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{resetEmail}}\",\n  \"otp\": \"{{resetOtp}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/auth/reset-password",
+            "description": "Set newPassword to a 16+ character strong password. Reset revokes existing sessions.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Super Admin",
+      "description": "Teacher creation and student batch access grants are restricted to SUPER_ADMIN.",
+      "item": [
+        {
+          "name": "Create teacher",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{newTeacherName}}\",\n  \"email\": \"{{newTeacherEmail}}\",\n  \"password\": \"{{newTeacherPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/admin/teachers",
+            "description": "Password must be at least 16 characters and include lowercase, uppercase, number, and special character."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.teacher?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('teacherId', result.teacher.id);",
+                  "    pm.collectionVariables.set('teacherId', result.teacher.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Grant student access to batch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"studentId\": \"{{studentId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/batches/{{batchId}}/enrollments",
+            "description": "Grant the selected student access to this batch."
+          }
+        },
+        {
+          "name": "Revoke student batch access",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/batches/{{batchId}}/enrollments/{{studentId}}",
+            "description": "Remove the student’s batch access."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Courses & Batches",
+      "description": "Teachers create courses and batches; students see courses only for batches they can access.",
+      "item": [
+        {
+          "name": "List courses",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/courses",
+            "description": "Returns courses visible to the logged-in role."
+          }
+        },
+        {
+          "name": "Create course",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Biology 101\",\n  \"description\": \"Introductory biology course\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/courses"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.course?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('courseId', result.course.id);",
+                  "    pm.collectionVariables.set('courseId', result.course.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create batch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Morning batch\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/courses/{{courseId}}/batches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.batch?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('batchId', result.batch.id);",
+                  "    pm.collectionVariables.set('batchId', result.batch.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Folders & Content",
+      "description": "Batch-scoped folder hierarchy and video/live/document content.",
+      "item": [
+        {
+          "name": "List batch folders",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/batches/{{batchId}}/folders",
+            "description": "Students must be enrolled in the batch."
+          }
+        },
+        {
+          "name": "Create folder",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Module 1\",\n  \"batchId\": \"{{batchId}}\",\n  \"parentFolderId\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/folders"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.folder?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('folderId', result.folder.id);",
+                  "    pm.collectionVariables.set('folderId', result.folder.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Cell structure lesson\",\n  \"type\": \"VIDEO\",\n  \"folderId\": \"{{folderId}}\",\n  \"videoUrl\": \"https://video.example.com/lesson-1\",\n  \"durationSeconds\": 900\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/content",
+            "description": "For LIVE_LINK, set type to LIVE_LINK and replace videoUrl with liveUrl. For DOCUMENT, set type to DOCUMENT and replace it with documentUrl."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.content?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('contentId', result.content.id);",
+                  "    pm.collectionVariables.set('contentId', result.content.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get content",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/content/{{contentId}}",
+            "description": "Student video responses do not expose the stored source URL."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Homework",
+      "description": "Teacher assignment, student submission, and teacher grading routes.",
+      "item": [
+        {
+          "name": "Create homework",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Cell worksheet\",\n  \"description\": \"Answer the questions in the worksheet.\",\n  \"dueDate\": \"2030-12-31T23:59:00.000Z\",\n  \"folderId\": \"{{folderId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/homework"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.homework?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('homeworkId', result.homework.id);",
+                  "    pm.collectionVariables.set('homeworkId', result.homework.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List batch homework",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/batches/{{batchId}}/homework"
+          }
+        },
+        {
+          "name": "Submit homework",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fileUrl\": \"https://files.example.com/submissions/worksheet.pdf\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/homework/{{homeworkId}}/submissions",
+            "description": "Replace fileUrl with the URL of a privately stored uploaded file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const result = pm.response.json(); if (result.submission?.id) {",
+                  "    if (pm.environment.name) pm.environment.set('submissionId', result.submission.id);",
+                  "    pm.collectionVariables.set('submissionId', result.submission.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Grade submission",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"marks\": 85,\n  \"feedback\": \"Good work. Review question 3.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/submissions/{{submissionId}}/grade"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Progress",
+      "description": "Student playback heartbeat and progress; teacher batch and individual watch reports.",
+      "item": [
+        {
+          "name": "Record video heartbeat",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contentId\": \"{{contentId}}\",\n  \"watchDurationDelta\": 10,\n  \"lastPosition\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/progress/heartbeat",
+            "description": "Send no more frequently than once every 8 seconds; duration delta is capped at 15 seconds."
+          }
+        },
+        {
+          "name": "My progress",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/progress/me",
+            "description": "Student-only batch/course video completion summary."
+          }
+        },
+        {
+          "name": "Batch progress",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/progress/batches/{{batchId}}",
+            "description": "Teacher-only progress report for an owned batch."
+          }
+        },
+        {
+          "name": "Student watch logs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/progress/batches/{{batchId}}/students/{{studentId}}",
+            "description": "Teacher-only progress and watch history for one enrolled student."
+          }
+        }
+      ]
+    },
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": "{{serverUrl}}/health",
+            "description": "Check whether the API server is responding.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000/api",
+      "type": "default"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "userRole",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "newStudentName",
+      "value": "New Student",
+      "type": "default"
+    },
+    {
+      "key": "newStudentEmail",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "newStudentPassword",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "newTeacherName",
+      "value": "New Teacher",
+      "type": "default"
+    },
+    {
+      "key": "newTeacherEmail",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "newTeacherPassword",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "resetEmail",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "resetOtp",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "newPassword",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "courseId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "batchId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "folderId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "contentId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "homeworkId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "submissionId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "studentId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "teacherId",
+      "value": "",
+      "type": "default"
+    },
+    {
+      "key": "serverUrl",
+      "value": "http://localhost:4000",
+      "type": "default"
+    }
+  ]
+}
