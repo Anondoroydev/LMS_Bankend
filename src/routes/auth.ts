@@ -22,15 +22,33 @@ const authRateLimit = rateLimit({
   message: { error: "Too many authentication requests. Try again later." },
 });
 
+function createSession(user: { id: string; role: UserRole; tokenVersion: number }) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET is not configured");
+  const expiresInSeconds = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 3600);
+  if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60) {
+    throw new Error("JWT_EXPIRES_IN_SECONDS must be an integer of at least 60");
+  }
+  const token = jwt.sign(
+    { role: user.role, tokenVersion: user.tokenVersion },
+    secret,
+    { subject: user.id, expiresIn: expiresInSeconds },
+  );
+  return { token, expiresIn: expiresInSeconds };
+}
+
 router.post("/register", authRateLimit, validateBody(registerSchema), async (req, res) => {
   const { name, email, password } = req.body as ReturnType<typeof registerSchema.parse>;
   const passwordHash = await bcrypt.hash(password, 12);
   try {
     const user = await prisma.user.create({
       data: { name, email, passwordHash, role: UserRole.STUDENT },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      select: { id: true, name: true, email: true, role: true, tokenVersion: true },
     });
-    res.status(201).json({ user });
+    res.status(201).json({
+      ...createSession(user),
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    });
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
       throw new HttpError(409, "An account with this email already exists");
@@ -45,20 +63,8 @@ router.post("/login", authRateLimit, validateBody(loginSchema), async (req, res)
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
     throw new HttpError(401, "Invalid email or password");
   }
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET is not configured");
-  const expiresInSeconds = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 3600);
-  if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60) {
-    throw new Error("JWT_EXPIRES_IN_SECONDS must be an integer of at least 60");
-  }
-  const token = jwt.sign(
-    { role: user.role, tokenVersion: user.tokenVersion },
-    secret,
-    { subject: user.id, expiresIn: expiresInSeconds },
-  );
   res.json({
-    token,
-    expiresIn: expiresInSeconds,
+    ...createSession(user),
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
   });
 });

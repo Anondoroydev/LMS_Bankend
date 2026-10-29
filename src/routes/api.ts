@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { ContentType, UserRole } from "@prisma/client";
+import { ContentType, Prisma, UserRole } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../config/database.js";
 import { HttpError } from "../middleware/errors.js";
@@ -13,6 +13,8 @@ import {
 import {
   batchSchema,
   contentSchema,
+  courseMessageSchema,
+  courseReviewSchema,
   createTeacherSchema,
   courseSchema,
   enrollmentSchema,
@@ -21,6 +23,7 @@ import {
   heartbeatSchema,
   homeworkSchema,
   submissionSchema,
+  studentProfileSchema,
 } from "../validators/schemas.js";
 import { validateBody } from "../middleware/validate.js";
 
@@ -28,6 +31,15 @@ const router = Router();
 const adminOnly = [authenticate, requireRole(UserRole.SUPER_ADMIN)];
 const teacherOnly = [authenticate, requireRole(UserRole.TEACHER)];
 const studentOnly = [authenticate, requireRole(UserRole.STUDENT)];
+const profileSelect = {
+  id: true,
+  name: true,
+  email: true,
+  phone: true,
+  fatherName: true,
+  motherName: true,
+  className: true,
+} as const;
 
 function param(req: AuthenticatedRequest, key: string) {
   const value = req.params[key];
@@ -71,6 +83,86 @@ async function assertBatchReadAccess(batchId: string, userId: string, role: User
   await ownedBatch(batchId, userId);
 }
 
+async function assertCourseChatAccess(courseId: string, userId: string, role: UserRole) {
+  if (role === UserRole.TEACHER) {
+    await ownedCourse(courseId, userId);
+    return;
+  }
+  if (role !== UserRole.STUDENT) throw new HttpError(403, "Insufficient permissions");
+  const course = await prisma.course.findFirst({
+    where: {
+      id: courseId,
+      batches: { some: { enrollments: { some: { studentId: userId } } } },
+    },
+    select: { id: true },
+  });
+  if (!course) throw new HttpError(404, "Course not found");
+}
+
+router.get("/admin/teachers", ...adminOnly, async (_req, res) => {
+  const teachers = await prisma.user.findMany({
+    where: { role: UserRole.TEACHER },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      createdAt: true,
+      _count: { select: { courses: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json({ teachers });
+});
+
+router.get("/admin/students", ...adminOnly, async (_req, res) => {
+  const students = await prisma.user.findMany({
+    where: { role: UserRole.STUDENT },
+    select: {
+      ...profileSelect,
+      createdAt: true,
+      enrollments: {
+        select: {
+          id: true,
+          batch: {
+            select: {
+              id: true,
+              name: true,
+              course: { select: { id: true, title: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json({ students });
+});
+
+router.get("/profile", ...studentOnly, async (req, res) => {
+  const { userId } = authenticatedUser(req as AuthenticatedRequest);
+  const profile = await prisma.user.findUnique({ where: { id: userId }, select: profileSelect });
+  if (!profile) throw new HttpError(404, "Student account not found");
+  const complete = Boolean(
+    profile.name.trim()
+    && profile.phone
+    && profile.fatherName
+    && profile.motherName
+    && profile.className,
+  );
+  res.json({ profile, complete });
+});
+
+router.patch("/profile", ...studentOnly, validateBody(studentProfileSchema), async (req, res) => {
+  const { userId } = authenticatedUser(req as AuthenticatedRequest);
+  const profile = await prisma.user.update({
+    where: { id: userId },
+    data: req.body,
+    select: profileSelect,
+  });
+  res.json({ profile, complete: true });
+});
+
 router.post(
   "/admin/teachers",
   ...adminOnly,
@@ -78,6 +170,28 @@ router.post(
   async (req, res) => {
     const { name, email, password } = req.body as ReturnType<typeof createTeacherSchema.parse>;
     const passwordHash = await bcrypt.hash(password, 12);
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      if (existing.role !== UserRole.STUDENT) {
+        throw new HttpError(409, "This email already belongs to a non-student account");
+      }
+      const [teacher] = await prisma.$transaction([
+        prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            name,
+            passwordHash,
+            role: UserRole.TEACHER,
+            tokenVersion: { increment: 1 },
+          },
+          select: { id: true, name: true, email: true, role: true, createdAt: true },
+        }),
+        prisma.passwordResetToken.deleteMany({ where: { userId: existing.id } }),
+      ]);
+      res.json({ teacher });
+      return;
+    }
+
     try {
       const teacher = await prisma.user.create({
         data: { name, email, passwordHash, role: UserRole.TEACHER },
@@ -106,9 +220,92 @@ router.get("/courses", authenticate, async (req, res) => {
   }
   const enrollments = await prisma.enrollment.findMany({
     where: { studentId: auth.userId },
-    include: { batch: { include: { course: true } } },
+    include: {
+      batch: {
+        include: {
+          course: {
+            include: { teacher: { select: { id: true, name: true } } },
+          },
+        },
+      },
+    },
   });
-  res.json({ courses: enrollments.map(({ batch }) => ({ ...batch.course, batch })) });
+  type EnrolledBatch = (typeof enrollments)[number]["batch"];
+  type EnrolledCourse = EnrolledBatch["course"] & { batch: EnrolledBatch; batches: EnrolledBatch[]; studentCount: number };
+  const courses = new Map<string, EnrolledCourse>();
+  for (const { batch } of enrollments) {
+    const course = courses.get(batch.course.id);
+    if (course) {
+      course.batches.push(batch);
+    } else {
+      courses.set(batch.course.id, { ...batch.course, batch, batches: [batch], studentCount: 0 });
+    }
+  }
+  const courseIds = [...courses.keys()];
+  if (courseIds.length) {
+    const courseEnrollments = await prisma.enrollment.findMany({
+      where: { batch: { courseId: { in: courseIds } } },
+      select: { studentId: true, batch: { select: { courseId: true } } },
+    });
+    const studentIdsByCourse = new Map<string, Set<string>>();
+    for (const enrollment of courseEnrollments) {
+      const students = studentIdsByCourse.get(enrollment.batch.courseId) ?? new Set<string>();
+      students.add(enrollment.studentId);
+      studentIdsByCourse.set(enrollment.batch.courseId, students);
+    }
+    for (const [courseId, course] of courses) {
+      course.studentCount = studentIdsByCourse.get(courseId)?.size ?? 0;
+    }
+  }
+  res.json({ courses: [...courses.values()] });
+});
+
+router.get("/courses/:courseId/reviews", authenticate, async (req, res) => {
+  const auth = authenticatedUser(req as AuthenticatedRequest);
+  const courseId = param(req as AuthenticatedRequest, "courseId");
+  if (auth.role === UserRole.STUDENT) {
+    await assertCourseChatAccess(courseId, auth.userId, auth.role);
+  } else if (auth.role === UserRole.TEACHER) {
+    await ownedCourse(courseId, auth.userId);
+  } else {
+    throw new HttpError(403, "Insufficient permissions");
+  }
+
+  const [reviews, summary, myReview] = await Promise.all([
+    prisma.courseReview.findMany({
+      where: { courseId },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      include: { student: { select: { name: true } } },
+    }),
+    prisma.courseReview.aggregate({
+      where: { courseId },
+      _avg: { rating: true },
+      _count: { _all: true },
+    }),
+    prisma.courseReview.findUnique({
+      where: { courseId_studentId: { courseId, studentId: auth.userId } },
+    }),
+  ]);
+  res.json({
+    reviews,
+    summary: { averageRating: summary._avg.rating ?? 0, reviewCount: summary._count._all },
+    myReview,
+  });
+});
+
+router.post("/courses/:courseId/reviews", ...studentOnly, validateBody(courseReviewSchema), async (req, res) => {
+  const { userId } = authenticatedUser(req as AuthenticatedRequest);
+  const courseId = param(req as AuthenticatedRequest, "courseId");
+  await assertCourseChatAccess(courseId, userId, UserRole.STUDENT);
+  const { rating, content } = req.body as ReturnType<typeof courseReviewSchema.parse>;
+  const review = await prisma.courseReview.upsert({
+    where: { courseId_studentId: { courseId, studentId: userId } },
+    create: { courseId, studentId: userId, rating, content },
+    update: { rating, content },
+    include: { student: { select: { name: true } } },
+  });
+  res.status(200).json({ review });
 });
 
 router.post("/courses", ...teacherOnly, validateBody(courseSchema), async (req, res) => {
@@ -116,6 +313,77 @@ router.post("/courses", ...teacherOnly, validateBody(courseSchema), async (req, 
   const course = await prisma.course.create({ data: { ...req.body, teacherId: userId } });
   res.status(201).json({ course });
 });
+
+router.delete("/courses/:courseId", authenticate, async (req, res) => {
+  const auth = authenticatedUser(req as AuthenticatedRequest);
+  if (auth.role !== UserRole.TEACHER && auth.role !== UserRole.SUPER_ADMIN) {
+    throw new HttpError(403, "Insufficient permissions");
+  }
+
+  const courseId = param(req as AuthenticatedRequest, "courseId");
+  const result = await prisma.course.deleteMany({
+    where: auth.role === UserRole.TEACHER
+      ? { id: courseId, teacherId: auth.userId }
+      : { id: courseId },
+  });
+  if (result.count !== 1) throw new HttpError(404, "Course not found");
+  res.status(204).end();
+});
+
+router.get("/courses/:courseId/messages", authenticate, async (req, res) => {
+  const auth = authenticatedUser(req as AuthenticatedRequest);
+  const courseId = param(req as AuthenticatedRequest, "courseId");
+  await assertCourseChatAccess(courseId, auth.userId, auth.role);
+
+  const afterId = req.query.after;
+  let where: Prisma.CourseMessageWhereInput = { courseId };
+  let orderBy: Array<{ createdAt: "asc" | "desc"; id: "asc" | "desc" }>;
+  if (typeof afterId === "string") {
+    const parsedId = z.string().uuid().safeParse(afterId);
+    if (!parsedId.success) throw new HttpError(400, "Invalid after cursor");
+    const cursor = await prisma.courseMessage.findFirst({
+      where: { id: parsedId.data, courseId },
+      select: { id: true, createdAt: true },
+    });
+    if (!cursor) throw new HttpError(400, "Invalid after cursor");
+    where = {
+      courseId,
+      OR: [
+        { createdAt: { gt: cursor.createdAt } },
+        { createdAt: cursor.createdAt, id: { gt: cursor.id } },
+      ],
+    };
+    orderBy = [{ createdAt: "asc", id: "asc" }];
+  } else if (afterId !== undefined) {
+    throw new HttpError(400, "Invalid after cursor");
+  } else {
+    orderBy = [{ createdAt: "desc", id: "desc" }];
+  }
+
+  const messages = await prisma.courseMessage.findMany({
+    where,
+    include: { sender: { select: { id: true, name: true, role: true } } },
+    orderBy,
+    take: 100,
+  });
+  res.json({ messages: typeof afterId === "string" ? messages : messages.reverse() });
+});
+
+router.post(
+  "/courses/:courseId/messages",
+  authenticate,
+  validateBody(courseMessageSchema),
+  async (req, res) => {
+    const auth = authenticatedUser(req as AuthenticatedRequest);
+    const courseId = param(req as AuthenticatedRequest, "courseId");
+    await assertCourseChatAccess(courseId, auth.userId, auth.role);
+    const message = await prisma.courseMessage.create({
+      data: { courseId, senderId: auth.userId, content: req.body.content },
+      include: { sender: { select: { id: true, name: true, role: true } } },
+    });
+    res.status(201).json({ message });
+  },
+);
 
 router.post("/courses/:courseId/batches", ...teacherOnly, validateBody(batchSchema), async (req, res) => {
   const { userId } = authenticatedUser(req as AuthenticatedRequest);
@@ -127,23 +395,42 @@ router.post("/courses/:courseId/batches", ...teacherOnly, validateBody(batchSche
 
 router.post(
   "/batches/:batchId/enrollments",
-  ...adminOnly,
+  authenticate,
   validateBody(enrollmentSchema),
   async (req, res) => {
+    const auth = authenticatedUser(req as AuthenticatedRequest);
+    if (auth.role !== UserRole.SUPER_ADMIN && auth.role !== UserRole.TEACHER) {
+      throw new HttpError(403, "Insufficient permissions");
+    }
+
     const batchId = param(req as AuthenticatedRequest, "batchId");
-    const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { id: true } });
-    if (!batch) throw new HttpError(404, "Batch not found");
-    const { studentId } = req.body as ReturnType<typeof enrollmentSchema.parse>;
-    const student = await prisma.user.findUnique({ where: { id: studentId } });
+    if (auth.role === UserRole.TEACHER) {
+      await ownedBatch(batchId, auth.userId);
+    } else {
+      const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { id: true } });
+      if (!batch) throw new HttpError(404, "Batch not found");
+    }
+
+    const enrollmentInput = req.body as ReturnType<typeof enrollmentSchema.parse>;
+    const student = await prisma.user.findUnique({
+      where: "studentEmail" in enrollmentInput
+        ? { email: enrollmentInput.studentEmail }
+        : { id: enrollmentInput.studentId },
+    });
     if (!student || student.role !== UserRole.STUDENT) {
       throw new HttpError(404, "Student account not found");
     }
+    const studentId = student.id;
+    const existingEnrollment = await prisma.enrollment.findUnique({
+      where: { studentId_batchId: { studentId, batchId } },
+      select: { id: true },
+    });
     const enrollment = await prisma.enrollment.upsert({
       where: { studentId_batchId: { studentId, batchId } },
       create: { studentId, batchId },
       update: {},
     });
-    res.status(201).json({ enrollment });
+    res.status(existingEnrollment ? 200 : 201).json({ enrollment, alreadyEnrolled: Boolean(existingEnrollment) });
   },
 );
 
@@ -176,12 +463,7 @@ router.get("/batches/:batchId/folders", authenticate, async (req, res) => {
     orderBy: { createdAt: "asc" },
   });
   if (auth.role === UserRole.STUDENT) {
-    res.json({
-      folders: folders.map((folder) => ({
-        ...folder,
-        contents: folder.contents.map(({ videoUrl: _protectedSource, ...content }) => content),
-      })),
-    });
+    res.json({ folders });
     return;
   }
   res.json({ folders });
@@ -222,8 +504,7 @@ router.get("/content/:contentId", authenticate, async (req, res) => {
     throw new HttpError(404, "Content not found");
   }
   if (auth.role === UserRole.STUDENT && content.type === ContentType.VIDEO) {
-    const { videoUrl: _protectedSource, ...studentContent } = content;
-    res.json({ content: studentContent, playback: { provider: "not_configured" } });
+    res.json({ content, playback: { provider: "html5" } });
     return;
   }
   res.json({ content });

@@ -17,6 +17,7 @@ enum ContentType {
   VIDEO
   LIVE_LINK
   DOCUMENT
+  TEXT
 }
 
 model User {
@@ -25,12 +26,18 @@ model User {
   email        String   @unique
   passwordHash String
   role         UserRole @default(STUDENT)
+  phone        String?
+  fatherName   String?
+  motherName   String?
+  className    String?
   tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   passwordResetTokens PasswordResetToken[]
   courses             Course[]             @relation("CourseTeacher")
+  courseMessages      CourseMessage[]      @relation("CourseMessageSender")
+  courseReviews       CourseReview[]
   enrollments         Enrollment[]         @relation("StudentEnrollments")
   submissions         Submission[]         @relation("StudentSubmissions")
   assignments         Homework[]           @relation("HomeworkCreator")
@@ -62,10 +69,43 @@ model Course {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  teacher User    @relation("CourseTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
-  batches Batch[]
+  teacher  User            @relation("CourseTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  batches  Batch[]
+  messages CourseMessage[]
+  reviews  CourseReview[]
 
   @@index([teacherId])
+}
+
+model CourseMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  courseId  String   @db.Uuid
+  senderId  String   @db.Uuid
+  content   String   @db.VarChar(2000)
+  createdAt DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  sender User   @relation("CourseMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, createdAt])
+  @@index([senderId])
+}
+
+model CourseReview {
+  id        String   @id @default(uuid()) @db.Uuid
+  courseId  String   @db.Uuid
+  studentId String   @db.Uuid
+  rating    Int
+  content   String   @db.VarChar(1200)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, studentId])
+  @@index([courseId, createdAt])
+  @@index([studentId])
 }
 
 model Batch {
@@ -118,6 +158,7 @@ model Content {
   videoUrl        String?
   liveUrl         String?
   documentUrl     String?
+  textContent     String?
   durationSeconds Int?
   folderId        String      @db.Uuid
   createdAt       DateTime    @default(now())

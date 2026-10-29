@@ -13,18 +13,18 @@ const strongPassword = z.string()
 
 export const registerSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  email: z.email().transform((value) => value.toLowerCase()),
-  password: z.string().min(12).max(128),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  password: strongPassword,
 });
 export const loginSchema = z.object({
-  email: z.email().transform((value) => value.toLowerCase()),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(1).max(128),
 });
 export const forgotPasswordSchema = z.object({
-  email: z.email().transform((value) => value.toLowerCase()),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
 });
 export const resetPasswordSchema = z.object({
-  email: z.email().transform((value) => value.toLowerCase()),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
   otp: z.string().regex(/^\d{6}$/, "OTP must be 6 digits"),
   password: strongPassword,
 });
@@ -35,11 +35,23 @@ export const courseSchema = z.object({
 export const batchSchema = z.object({
   name: z.string().trim().min(1).max(120),
 });
-export const enrollmentSchema = z.object({ studentId: uuid });
+export const enrollmentSchema = z.union([
+  z.object({ studentId: uuid }),
+  z.object({
+    studentEmail: z.string().trim().email().transform((value) => value.toLowerCase()),
+  }),
+]);
 export const createTeacherSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  email: z.email().transform((value) => value.toLowerCase()),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: strongPassword,
+});
+export const studentProfileSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  phone: z.string().trim().min(7).max(30),
+  fatherName: z.string().trim().min(1).max(120),
+  motherName: z.string().trim().min(1).max(120),
+  className: z.string().trim().min(1).max(80),
 });
 export const folderSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -53,13 +65,15 @@ export const contentSchema = z.object({
   videoUrl: url.optional(),
   liveUrl: url.optional(),
   documentUrl: url.optional(),
+  textContent: z.string().trim().min(1).max(20000).optional(),
   durationSeconds: z.number().int().positive().max(24 * 60 * 60).optional(),
 }).superRefine((value, context) => {
   const requiredField = {
     [ContentType.VIDEO]: "videoUrl",
     [ContentType.LIVE_LINK]: "liveUrl",
     [ContentType.DOCUMENT]: "documentUrl",
-  }[value.type] as "videoUrl" | "liveUrl" | "documentUrl";
+    [ContentType.TEXT]: "textContent",
+  }[value.type] as "videoUrl" | "liveUrl" | "documentUrl" | "textContent";
   if (!value[requiredField]) {
     context.addIssue({ code: "custom", path: [requiredField], message: `${requiredField} is required for ${value.type}` });
   }
@@ -76,6 +90,13 @@ export const submissionSchema = z.object({
 export const gradeSchema = z.object({
   marks: z.number().min(0).max(1000),
   feedback: z.string().max(10000).optional(),
+});
+export const courseMessageSchema = z.object({
+  content: z.string().trim().min(1).max(2000),
+});
+export const courseReviewSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  content: z.string().trim().min(3).max(1200),
 });
 export const heartbeatSchema = z.object({
   contentId: uuid,

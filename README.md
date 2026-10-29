@@ -55,6 +55,12 @@ tests/
 
 Run the HTTP-level API tests with `npm test`. They use a mocked Prisma client and do not require a running PostgreSQL server.
 
+## Frontend
+
+A separate React + TypeScript frontend is available in [`frontend/`](./frontend/). Start the backend, then follow the [frontend setup instructions](./frontend/README.md) to run it at `http://localhost:3000`.
+
+The student experience uses a homepage-style learning portal with enrolled courses, class lessons, assignment submissions, progress, profile editing, and a course chat shared with the owning teacher. Course chat messages refresh every few seconds. Apply the checked-in migrations before running the updated API.
+
 ## Deploy to Render
 
 This repository includes [`render.yaml`](./render.yaml) for a Render free-tier web service. The Blueprint intentionally does not create a PostgreSQL instance, to avoid silently provisioning a paid database. Provide a PostgreSQL `DATABASE_URL` from a provider you choose (for example, Render Postgres or another managed PostgreSQL service); verify that provider's current pricing and retention policy before creating a database.
@@ -94,6 +100,10 @@ All API routes use the `/api` prefix. Authenticated routes require `Authorizatio
 | POST | `/auth/reset-password` | Public | Verify email + OTP and set a new password |
 | POST | `/admin/teachers` | Super admin | Create a teacher account |
 | GET, POST | `/courses` | Authenticated / teacher | List accessible courses or create a course |
+| DELETE | `/courses/:courseId` | Owning teacher / super admin | Permanently delete a course and its classes, lessons, assignments, submissions, and progress |
+| GET, POST | `/courses/:courseId/messages` | Enrolled student / owning teacher | Read or send course chat messages |
+| GET | `/courses/:courseId/reviews` | Enrolled student / owning teacher | View course rating and recent student reviews |
+| POST | `/courses/:courseId/reviews` | Enrolled student | Create or update one course review |
 | POST | `/courses/:courseId/batches` | Teacher | Create a batch |
 | POST | `/batches/:batchId/enrollments` | Super admin | Grant a student access to a batch |
 | DELETE | `/batches/:batchId/enrollments/:studentId` | Super admin | Revoke a student's batch access |
@@ -117,6 +127,6 @@ All API routes use the `/api` prefix. Authenticated routes require `Authorizatio
 - Progress percentages count completed videos over available videos; documents and live links are not included in the video completion denominator.
 - Passwords are stored as bcrypt hashes. Keep `.env` private and rotate production JWT secrets.
 - Logout and password reset revoke all existing JWTs for that account. Reset OTPs are stored as HMAC hashes, are single-use, expire after 10 minutes, and are locked after 5 failed attempts.
-- Student content responses do not expose the stored video source URL. Configure a DRM provider and add its playback-token integration before enabling student playback; disabling browser controls alone cannot prevent recording.
+- Enrolled students can play video lessons in the built-in HTML5 player. Browser playback controls cannot guarantee prevention of downloads or screen recording; integrate a DRM provider if stronger playback protection is needed.
 - Submission records currently accept a file URL. In production, connect this to private object storage with short-lived upload/download URLs, file type/size validation, and malware scanning.
 - Live-session visibility is batch-scoped through content access. Real-time push notifications require a separately configured delivery service.
